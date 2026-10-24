@@ -60,17 +60,43 @@ score as a triage aid for prioritizing manual review, not ground truth.
 ## CVE cross-check
 
 `data/vulnerabilities.json` holds the CVEs to check detected PHP
-versions against (currently CVE-2026-109618 and CVE-2026-109619). Each
-entry's `affected_versions` is a [PEP 440 specifier](https://packaging.pypa.io/en/stable/specifiers.html)
-(e.g. `">=8.1.0,<8.1.30"`). **Both entries ship with `affected_versions:
-"UNKNOWN"`** — I didn't have a verified version range for either CVE, so
-rather than guess, the scanner reports those as "needs manual follow-up"
-instead of a real verdict. Fill in the real range from the official PHP
-advisory / NVD entry once you have it, and matching starts working
-immediately — no code changes needed. A CVE's risk score in the output
-reflects *detection confidence* (how sure we are this is a PHP backend,
-in or out of the affected range), not a modeled probability of
-successful exploitation.
+versions against (currently CVE-2026-109618 and CVE-2026-109619). An
+entry's `affected_versions` can be:
+
+- `"UNKNOWN"` — no verified range yet; shows as "needs manual
+  follow-up" rather than a guessed verdict.
+- a plain [PEP 440 specifier](https://packaging.pypa.io/en/stable/specifiers.html)
+  string (e.g. `">=8.1.0,<8.1.30"`) — one contiguous affected band.
+- a **fixed-version table** — how PHP actually ships security fixes,
+  independently per minor branch:
+  ```json
+  "affected_versions": {
+    "fixed_in": {"8.2": "8.2.35", "8.3": "8.3.36", "8.4": "8.4.27", "8.5": "8.5.12"},
+    "unsupported_branches_affected": true
+  }
+  ```
+  A version is vulnerable iff it's below its own branch's listed fix. A
+  branch older than the oldest one listed (e.g. 7.x/8.0/8.1, if the
+  table starts at 8.2) is treated as vulnerable by default — those are
+  EOL and never got a backport; set `unsupported_branches_affected:
+  false` if that's not true for a given CVE. A branch newer than the
+  newest one listed is assumed to already include the fix.
+
+Both CVEs currently use this fixed-in table (`8.2.35` / `8.3.36` /
+`8.4.27` / `8.5.12`), since both were reported fixed in the same
+security release — if they turn out to have different fix versions,
+split them into two separate tables.
+
+When an explicit `PHP/x.y.z` version header is present, it's already a
+high-confidence PHP signal (`php_probability` ~0.95+), and the version
+comparison against the fixed-version table is deterministic — so the
+output says "vulnerable" / "not vulnerable" with the specific branch and
+patch version in the reason, not just a probability. (The one caveat
+passive fingerprinting can't rule out: the header being spoofed or
+suppressed.) A CVE's `risk_score` otherwise reflects *detection
+confidence* — how sure we are this is a PHP backend, combined with how
+sure the version match is — not a modeled probability of successful
+exploitation.
 
 ## Development
 

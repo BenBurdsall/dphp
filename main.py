@@ -89,7 +89,7 @@ def cmd_urls(args: argparse.Namespace) -> int:
         write_csv(results, csv_path)
         print(f"\nCSV written to {csv_path}", file=sys.stderr)
 
-    if any(cve.affected_versions.strip().upper() == "UNKNOWN" for cve in cve_db):
+    if any(not cve.has_version_data() for cve in cve_db):
         print(
             "\nNote: one or more CVEs in data/vulnerabilities.json still have "
             "affected_versions = UNKNOWN. Those show as 'needs manual follow-up' "

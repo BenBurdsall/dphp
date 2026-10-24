@@ -3,16 +3,32 @@
     "title": "PHP out-of-memory handling remote code execution",
     "severity": "Critical",
     "cvss_v4": 9.2,
-    "summary": "Flaw in how PHP handles out-of-memory conditions during request processing. The CNA advisory states that all PHP installations serving web requests are potentially at risk. PLACEHOLDER: affected_versions below is UNKNOWN until confirmed against the authoritative PHP advisory / NVD entry -- do not treat 'UNKNOWN' as 'not vulnerable'.",
-    "affected_versions": "UNKNOWN",
+    "summary": "Flaw in how PHP handles out-of-memory conditions during request processing. The CNA advisory states that all PHP installations serving web requests are potentially at risk. Fixed per-branch in PHP 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12; older/unsupported branches (pre-8.2) never received a backport and are treated as affected.",
+    "affected_versions": {
+      "fixed_in": {
+        "8.2": "8.2.35",
+        "8.3": "8.3.36",
+        "8.4": "8.4.27",
+        "8.5": "8.5.12"
+      },
+      "unsupported_branches_affected": true
+    },
     "references": []
   },
   "CVE-2026-109619": {
     "title": "PHP use-after-free leading to cross-request data exposure",
     "severity": "UNKNOWN",
     "cvss_v4": null,
-    "summary": "Use-after-free bug where data left behind by one web request can be accessed during another request, potentially leading to code execution. PLACEHOLDER: affected_versions below is UNKNOWN until confirmed against the authoritative PHP advisory / NVD entry -- do not treat 'UNKNOWN' as 'not vulnerable'.",
-    "affected_versions": "UNKNOWN",
+    "summary": "Use-after-free bug where data left behind by one web request can be accessed during another request, potentially leading to code execution. Addressed in the same security release as CVE-2026-109618, so the same per-branch fixed versions are applied here: PHP 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12; older/unsupported branches (pre-8.2) never received a backport and are treated as affected.",
+    "affected_versions": {
+      "fixed_in": {
+        "8.2": "8.2.35",
+        "8.3": "8.3.36",
+        "8.4": "8.4.27",
+        "8.5": "8.5.12"
+      },
+      "unsupported_branches_affected": true
+    },
     "references": []
   }
 }

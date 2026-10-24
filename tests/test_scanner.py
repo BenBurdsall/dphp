@@ -4,7 +4,7 @@ import requests
 
 from phpdetector.fingerprints import EngineFingerprint, Signal, SignalKind
 from phpdetector.scanner import scan_one
-from phpdetector.vulnerabilities import CVEDefinition
+from phpdetector.vulnerabilities import CVEDefinition, FixedVersionTable
 
 
 def _mock_response(status=200, headers=None, cookies=None, body=""):
@@ -38,7 +38,7 @@ def test_detects_php_version_from_header_and_matches_cve():
     assert result.probed_paths is False  # confident on first pass, no escalation
     assert len(result.cve_assessments) == 1
     assert result.cve_assessments[0].cve_id == "CVE-TEST-0001"
-    assert result.cve_assessments[0].label.startswith("likely vulnerable")
+    assert result.cve_assessments[0].label.startswith("vulnerable")
 
 
 def test_version_outside_known_range_is_low_risk():
@@ -49,7 +49,7 @@ def test_version_outside_known_range_is_low_risk():
         result = scan_one("http://example.test", cve_db=cve_db, engine_db=engine_db)
 
     assert result.cve_assessments[0].risk_score == 0.0
-    assert result.cve_assessments[0].label.startswith("likely not vulnerable")
+    assert result.cve_assessments[0].label.startswith("not vulnerable")
 
 
 def test_unknown_cve_range_needs_follow_up():
@@ -61,6 +61,51 @@ def test_unknown_cve_range_needs_follow_up():
 
     assert result.cve_assessments[0].label.startswith("needs manual follow-up")
     assert result.cve_assessments[0].risk_score > 0
+
+
+def _fixed_version_cve_db():
+    table = FixedVersionTable(
+        fixed_in={"8.2": "8.2.35", "8.3": "8.3.36", "8.4": "8.4.27", "8.5": "8.5.12"},
+        unsupported_branches_affected=True,
+    )
+    return [CVEDefinition("CVE-TEST-0004", "t", "Critical", 9.2, "s", table, [])]
+
+
+def test_patched_version_in_branch_is_not_vulnerable():
+    engine_db = _php_header_engine_db()
+    resp = _mock_response(headers={"X-Powered-By": "PHP/8.3.36"})
+    with patch("phpdetector.scanner.requests.get", return_value=resp):
+        result = scan_one("http://example.test", cve_db=_fixed_version_cve_db(), engine_db=engine_db)
+    assert result.cve_assessments[0].risk_score == 0.0
+    assert result.cve_assessments[0].label.startswith("not vulnerable")
+
+
+def test_unpatched_version_in_branch_is_vulnerable():
+    engine_db = _php_header_engine_db()
+    resp = _mock_response(headers={"X-Powered-By": "PHP/8.3.10"})
+    with patch("phpdetector.scanner.requests.get", return_value=resp):
+        result = scan_one("http://example.test", cve_db=_fixed_version_cve_db(), engine_db=engine_db)
+    assert result.cve_assessments[0].risk_score > 0.9
+    assert result.cve_assessments[0].label.startswith("vulnerable")
+    assert "8.3.36" in result.cve_assessments[0].label
+
+
+def test_eol_branch_treated_as_vulnerable():
+    engine_db = _php_header_engine_db()
+    resp = _mock_response(headers={"X-Powered-By": "PHP/8.1.27"})
+    with patch("phpdetector.scanner.requests.get", return_value=resp):
+        result = scan_one("http://example.test", cve_db=_fixed_version_cve_db(), engine_db=engine_db)
+    assert result.cve_assessments[0].risk_score > 0.9
+    assert result.cve_assessments[0].label.startswith("vulnerable")
+
+
+def test_newer_branch_assumed_fixed():
+    engine_db = _php_header_engine_db()
+    resp = _mock_response(headers={"X-Powered-By": "PHP/9.0.0"})
+    with patch("phpdetector.scanner.requests.get", return_value=resp):
+        result = scan_one("http://example.test", cve_db=_fixed_version_cve_db(), engine_db=engine_db)
+    assert result.cve_assessments[0].risk_score == 0.0
+    assert result.cve_assessments[0].label.startswith("not vulnerable")
 
 
 def test_ambiguous_first_pass_escalates_to_path_probing():

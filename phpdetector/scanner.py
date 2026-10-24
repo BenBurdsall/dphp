@@ -168,16 +168,25 @@ def scan_one(
     for cve in cve_db:
         if php_probability < CVE_APPLICABILITY_THRESHOLD:
             continue
-        if result.php_version and cve.affected_versions.strip().upper() != "UNKNOWN":
-            verdict = cve.matches(result.php_version)
-            if verdict is True:
-                risk, label = php_probability, "likely vulnerable (version in known-affected range)"
-            elif verdict is False:
-                risk, label = 0.0, "likely not vulnerable (version outside known-affected range)"
-            else:
-                risk, label = php_probability, "needs manual follow-up (version string did not parse)"
+
+        if result.php_version:
+            verdict, reason = cve.explain(result.php_version)
         else:
-            risk, label = php_probability, "needs manual follow-up (PHP version not visible, or CVE range not yet confirmed)"
+            verdict, reason = None, "PHP version not visible in response headers"
+
+        if verdict is True:
+            # An explicit version header is itself a high-confidence PHP
+            # signal (php_probability is already ~0.95+ in this branch),
+            # and the version comparison against the known fixed release
+            # is deterministic -- so this is as close to "confirmed" as
+            # passive fingerprinting gets, short of the header being
+            # spoofed or suppressed.
+            risk, label = php_probability, f"vulnerable -- {reason}"
+        elif verdict is False:
+            risk, label = 0.0, f"not vulnerable -- {reason}"
+        else:
+            risk, label = php_probability, f"needs manual follow-up -- {reason}"
+
         result.cve_assessments.append(CVEAssessment(cve.cve_id, risk, label))
 
     return result
