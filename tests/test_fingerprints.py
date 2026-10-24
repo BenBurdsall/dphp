@@ -114,9 +114,27 @@ def test_evaluate_all_engines_combines_php_probability():
 def test_load_engine_db_from_real_data_file():
     engines = load_engine_db()
     names = {e.name for e in engines}
-    for expected in ("PHP", "WordPress", "WooCommerce", "Drupal", "Joomla", "Laravel", "Moodle"):
+    for expected in (
+        "PHP", "WordPress", "WooCommerce", "Drupal", "Joomla", "Laravel", "Moodle",
+        "phpMyAdmin", "Nextcloud", "CodeIgniter", "CakePHP", "TYPO3", "Roundcube",
+    ):
         assert expected in names
     for engine in engines:
         assert engine.signals, f"{engine.name} has no signals"
         for sig in engine.signals:
             assert 0.0 <= sig.weight <= 1.0
+
+
+def test_php_engine_detects_leaked_fatal_error_in_html():
+    engines = load_engine_db()
+    php_engine = next(e for e in engines if e.name == "PHP")
+    # Realistic html_errors=On PHP output: tags interposed between words.
+    score, evidence = evaluate_engine(
+        php_engine, headers={}, cookie_text="",
+        body_text=(
+            "<b>Fatal error</b>:  Uncaught Error: Call to undefined function foo() "
+            "in <b>/var/www/html/index.php</b> on line <b>12</b>"
+        ),
+    )
+    assert score > 0.9
+    assert len(evidence) >= 2  # multiple independent error-leak signals fired

@@ -8,13 +8,20 @@ Two subcommands:
 
 `urls` sends ordinary GET requests and reads response headers/cookies/
 HTML -- it never sends exploit payloads. It tries a single request per
-URL first and only makes a few extra requests (to well-known CMS paths)
-when that first pass is ambiguous. Only point it at hosts you own or are
-explicitly authorized to test.
+URL first and only escalates through further tiers (CMS paths, then a
+few generic structural checks) when a result is still ambiguous. Only
+point it at hosts you own or are explicitly authorized to test.
+
+--permission additionally enables a last-resort probe (a malformed,
+array-typed query parameter meant to trigger a leaked PHP warning) when
+every other check was still inconclusive. It's noisy enough to show up
+in logs -- only use it where you have explicit permission to test that
+way.
 
 Usage:
     python detect.py urls https://example.com
     python detect.py urls my_urls.txt
+    python detect.py urls my_urls.txt --permission
 """
 import argparse
 import sys
@@ -76,8 +83,16 @@ def cmd_urls(args: argparse.Namespace) -> int:
         print("No URLs to scan.", file=sys.stderr)
         return 1
 
+    if args.permission:
+        print(
+            "--permission enabled: a malformed-input probe may fire for URLs that are "
+            "still inconclusive after every other check. Make sure you have explicit "
+            "permission to test every target this way -- it's noisy and shows up in logs.\n",
+            file=sys.stderr,
+        )
+
     cve_db = load_cve_db()
-    results = scan_urls(urls, cve_db=cve_db)
+    results = scan_urls(urls, cve_db=cve_db, permission=args.permission)
 
     if args.json:
         print(to_json(results))
@@ -121,6 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
     urls_parser.add_argument("target", help="A URL to scan, or a path to a text file with one URL per line")
     urls_parser.add_argument("--json", action="store_true", help="Print results as JSON instead of a table")
     urls_parser.add_argument("--csv", help="Also write results to this CSV path")
+    urls_parser.add_argument(
+        "--permission", action="store_true",
+        help=(
+            "Enable a last-resort, higher-intensity probe (a malformed array-typed "
+            "query parameter, meant to trigger a leaked PHP warning) for targets still "
+            "inconclusive after every other check. Only use this on hosts you have "
+            "EXPLICIT permission to test this way -- it's noisy and shows up in logs."
+        ),
+    )
     urls_parser.set_defaults(func=cmd_urls)
 
     return parser

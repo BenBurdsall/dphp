@@ -1,9 +1,18 @@
 from unittest.mock import Mock, patch
+from urllib.parse import urlparse
 
+import pytest
 import requests
 
 from phpdetector.fingerprints import EngineFingerprint, Signal, SignalKind
-from phpdetector.scanner import scan_one
+from phpdetector.scanner import (
+    CUSTOM_ERROR_PAGE_WEIGHT,
+    EXTENSION_BEHAVIOR_WEIGHT,
+    FRONT_CONTROLLER_200_WEIGHT,
+    MALFORMED_INPUT_WEIGHT,
+    TRAILING_SLASH_WEIGHT,
+    scan_one,
+)
 from phpdetector.vulnerabilities import CVEDefinition, FixedVersionTable
 
 
@@ -127,19 +136,22 @@ def test_ambiguous_first_pass_escalates_to_path_probing():
 
 def test_waf_blanket_status_does_not_create_false_positive():
     """If every path (including a nonexistent one) returns the same status,
-    that must not be treated as evidence the real paths exist."""
+    that must not be treated as evidence the real paths exist -- in tier 2
+    (CMS paths) or tier 3 (structural probes)."""
     engine_db = [EngineFingerprint("WordPress", signals=[
         Signal(SignalKind.PATH, "/wp-login.php", 0.6, "/wp-login.php reachable"),
     ])]
     homepage = _mock_response(headers={}, body="nothing interesting here")
-    baseline_403 = _mock_response(status=403, body="forbidden")
-    probe_403 = _mock_response(status=403, body="forbidden")
+    forbidden = _mock_response(status=403, body="forbidden")
 
-    with patch("phpdetector.scanner.requests.get", side_effect=[homepage, baseline_403, probe_403]):
+    # homepage, then every probe (baseline, the one CMS path, and tier 3's
+    # extension/index.php/trailing-slash checks) gets the same blanket 403.
+    with patch("phpdetector.scanner.requests.get", side_effect=[homepage] + [forbidden] * 10):
         result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
 
     assert result.php_probability == 0.0
     assert result.engine_matches == []
+    assert result.structural_evidence == []
 
 
 def test_confident_first_pass_does_not_probe():
@@ -155,8 +167,9 @@ def test_confident_first_pass_does_not_probe():
 
 def test_no_php_detected():
     engine_db = _php_header_engine_db()
-    resp = _mock_response(headers={"Server": "nginx"})
-    with patch("phpdetector.scanner.requests.get", return_value=resp):
+    homepage = _mock_response(headers={"Server": "nginx"})
+    not_found = _mock_response(status=404, body="Not Found")
+    with patch("phpdetector.scanner.requests.get", side_effect=[homepage] + [not_found] * 10):
         result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
     assert not result.php_detected
     assert result.cve_assessments == []
@@ -167,3 +180,193 @@ def test_unreachable_url():
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
     assert not result.reachable
     assert result.error
+
+
+def test_url_extension_hint_boosts_confidence_at_no_extra_cost():
+    """Requesting a .php URL directly is a free, strong signal -- no
+    engine needs to match anything for this to push php_probability up,
+    and it must not trigger the extra path-probing requests on its own."""
+    resp = _mock_response(headers={}, body="plain page")
+    with patch("phpdetector.scanner.requests.get", return_value=resp) as mock_get:
+        result = scan_one("http://example.test/index.php", cve_db=[], engine_db=[])
+
+    assert mock_get.call_count == 1
+    assert result.probed_paths is False
+    assert result.url_hint == "requested URL itself ends in .php"
+    assert result.php_probability >= 0.9
+
+
+def test_non_php_url_gets_no_hint():
+    resp = _mock_response(headers={}, body="plain page")
+    with patch("phpdetector.scanner.requests.get", return_value=resp):
+        result = scan_one("http://example.test/about", cve_db=[], engine_db=[])
+    assert result.url_hint is None
+
+
+def test_leaked_fatal_error_detected_from_baseline_probe_body():
+    """The baseline nonexistent-path probe is already fetched to detect a
+    WAF/catch-all; its body should also be scanned for a classic PHP
+    error leak, at no extra request cost."""
+    engine_db = [EngineFingerprint("PHP", signals=[
+        Signal(SignalKind.HTML, r"Fatal error(</b>)?\s*:", 0.9, "PHP fatal error leaked"),
+    ])]
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    baseline_404 = _mock_response(
+        status=404,
+        body="<b>Fatal error</b>: Uncaught Error: Call to undefined function in /var/www/html/x.php on line 42",
+    )
+
+    with patch("phpdetector.scanner.requests.get", side_effect=[homepage, baseline_404]):
+        result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
+
+    assert result.php_probability == pytest.approx(0.9)
+    assert result.engine_matches and result.engine_matches[0].evidence == ["PHP fatal error leaked"]
+
+
+# --- tier 3: structural probes (only fire if tiers 1-2 stay ambiguous) ---
+
+def test_front_controller_200_is_detected():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    not_found = _mock_response(status=404, body="")  # baseline, .php ext check
+    index_200 = _mock_response(status=200, body="")  # /index.php
+
+    with patch(
+        "phpdetector.scanner.requests.get",
+        side_effect=[homepage, not_found, not_found, index_200, not_found],
+    ):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.structural_probed is True
+    assert result.php_probability == pytest.approx(FRONT_CONTROLLER_200_WEIGHT)
+    assert "/index.php returns 200 directly" in result.structural_evidence
+
+
+def test_extension_behavior_difference_is_detected():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    baseline_404 = _mock_response(status=404, body="")  # .html baseline
+    ext_500 = _mock_response(status=500, body="")  # .php gets a different status
+    index_404 = _mock_response(status=404, body="")
+    slash_404 = _mock_response(status=404, body="")
+
+    with patch(
+        "phpdetector.scanner.requests.get",
+        side_effect=[homepage, baseline_404, ext_500, index_404, slash_404],
+    ):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.php_probability == pytest.approx(EXTENSION_BEHAVIOR_WEIGHT)
+    assert any("different status" in e for e in result.structural_evidence)
+
+
+def test_custom_error_page_is_detected():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    custom_404_body = "<html><body><h1>Oops, nothing here</h1>" + "x" * 200 + "</body></html>"
+    custom_404 = _mock_response(status=404, body=custom_404_body)
+    not_found = _mock_response(status=404, body=custom_404_body)  # identical body -> no extension signal
+
+    with patch(
+        "phpdetector.scanner.requests.get",
+        side_effect=[homepage, custom_404, not_found, not_found, not_found],
+    ):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.php_probability == pytest.approx(CUSTOM_ERROR_PAGE_WEIGHT)
+    assert any("isn't a default Apache/nginx template" in e for e in result.structural_evidence)
+
+
+def test_default_apache_404_page_is_not_flagged_as_custom():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    apache_body = (
+        "<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1>"
+        "<hr><address>Apache/2.4.41 (Ubuntu) Server at example.test Port 80</address>" + "x" * 150
+        + "</body></html>"
+    )
+    apache_404 = _mock_response(status=404, body=apache_body)
+
+    with patch(
+        "phpdetector.scanner.requests.get",
+        side_effect=[homepage, apache_404, apache_404, apache_404, apache_404],
+    ):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.php_probability == 0.0
+    assert result.structural_evidence == []
+
+
+def test_trailing_slash_redirect_is_detected():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    call_count = {"n": 0}
+
+    def side_effect(url, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return homepage
+        path = urlparse(url).path
+        if "/phpdetector-slash-check-" in path:
+            resp = _mock_response(status=301, body="")
+            resp.headers = {"Location": path + "/"}
+            return resp
+        return _mock_response(status=404, body="")
+
+    with patch("phpdetector.scanner.requests.get", side_effect=side_effect):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.php_probability == pytest.approx(TRAILING_SLASH_WEIGHT)
+    assert any("trailing slash" in e for e in result.structural_evidence)
+
+
+def test_structural_probes_do_not_fire_on_a_confident_first_pass():
+    engine_db = _php_header_engine_db()
+    homepage = _mock_response(headers={"X-Powered-By": "PHP/8.3.0"})
+
+    with patch("phpdetector.scanner.requests.get", return_value=homepage) as mock_get:
+        result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
+
+    assert mock_get.call_count == 1
+    assert result.structural_probed is False
+    assert result.structural_evidence == []
+
+
+# --- tier 4: --permission only ---
+
+def test_permission_probe_not_used_without_the_flag():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    not_found = _mock_response(status=404, body="")
+
+    with patch("phpdetector.scanner.requests.get", side_effect=[homepage] + [not_found] * 10) as mock_get:
+        result = scan_one("http://example.test", cve_db=[], engine_db=[], permission=False)
+
+    assert result.permission_probe_used is False
+    # tiers 1-3 only: homepage + baseline + ext + index.php + trailing-slash = 5 calls, no 6th.
+    assert mock_get.call_count == 5
+
+
+def test_permission_probe_fires_when_enabled_and_still_ambiguous():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    not_found = _mock_response(status=404, body="")
+    warning_leak = _mock_response(
+        status=200,
+        body="Warning: array_map() expects parameter 2 to be array in /var/www/html/index.php on line 7",
+    )
+
+    with patch(
+        "phpdetector.scanner.requests.get",
+        side_effect=[homepage, not_found, not_found, not_found, not_found, warning_leak],
+    ) as mock_get:
+        result = scan_one("http://example.test", cve_db=[], engine_db=[], permission=True)
+
+    assert mock_get.call_count == 6
+    assert result.permission_probe_used is True
+    assert result.php_probability == pytest.approx(MALFORMED_INPUT_WEIGHT)
+    assert any("array-typed query parameter" in e for e in result.structural_evidence)
+
+
+def test_permission_probe_skipped_when_already_confident():
+    engine_db = _php_header_engine_db()
+    homepage = _mock_response(headers={"X-Powered-By": "PHP/8.3.0"})
+
+    with patch("phpdetector.scanner.requests.get", return_value=homepage) as mock_get:
+        result = scan_one("http://example.test", cve_db=[], engine_db=engine_db, permission=True)
+
+    assert mock_get.call_count == 1
+    assert result.permission_probe_used is False

@@ -6,7 +6,14 @@
       {"kind": "header", "header_name": "Server", "pattern": "PHP/\\d", "weight": 0.95, "description": "Server header includes a PHP version token"},
       {"kind": "header", "header_name": "X-Powered-By", "pattern": "php", "weight": 0.6, "description": "X-Powered-By header mentions PHP without a version"},
       {"kind": "header", "header_name": "Server", "pattern": "php", "weight": 0.5, "description": "Server header mentions PHP without a version"},
-      {"kind": "cookie", "pattern": "PHPSESSID=", "weight": 0.75, "description": "PHPSESSID cookie present (default PHP session cookie name)"}
+      {"kind": "cookie", "pattern": "PHPSESSID=", "weight": 0.75, "description": "PHPSESSID cookie present (default PHP session cookie name)"},
+      {"kind": "html", "pattern": "Fatal error(</b>)?\\s*:", "weight": 0.85, "description": "'Fatal error:' message leaked in response (display_errors likely on)"},
+      {"kind": "html", "pattern": "Parse error(</b>)?\\s*:", "weight": 0.85, "description": "'Parse error:' message leaked in response"},
+      {"kind": "html", "pattern": "Uncaught \\w+(Error|Exception)", "weight": 0.6, "description": "PHP 'Uncaught <Error/Exception>' message leaked in response"},
+      {"kind": "html", "pattern": "on line\\s*(<b>)?\\d+", "weight": 0.4, "description": "'on line N' PHP error suffix leaked in response (weak alone)"},
+      {"kind": "html", "pattern": "#0\\s+\\{main\\}", "weight": 0.8, "description": "PHP stack-trace footer (#0 {main}) leaked in response"},
+      {"kind": "header", "header_name": "Cache-Control", "pattern": "no-store,\\s*no-cache,\\s*must-revalidate", "weight": 0.35, "description": "default PHP session cache-limiter Cache-Control header"},
+      {"kind": "header", "header_name": "Pragma", "pattern": "no-cache", "weight": 0.1, "description": "Pragma: no-cache (weak alone -- PHP's session default, but widely overridden)"}
     ]
   },
   "WordPress": {
@@ -106,6 +113,50 @@
     "signals": [
       {"kind": "cookie", "pattern": "MoodleSession", "weight": 0.85, "description": "MoodleSession cookie"},
       {"kind": "path", "pattern": "/theme/", "weight": 0.4, "description": "/theme/ reachable"}
+    ]
+  },
+  "phpMyAdmin": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "phpMyAdmin", "weight": 0.85, "description": "phpMyAdmin session cookie"},
+      {"kind": "html", "pattern": "<title>\\s*phpMyAdmin", "weight": 0.9, "description": "phpMyAdmin page title"},
+      {"kind": "path", "pattern": "/phpmyadmin/", "weight": 0.5, "description": "/phpmyadmin/ reachable"}
+    ]
+  },
+  "Nextcloud": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "oc_sessionPassphrase", "weight": 0.85, "description": "oc_sessionPassphrase cookie (Nextcloud/ownCloud)"},
+      {"kind": "cookie", "pattern": "nc_sameSiteCookielax", "weight": 0.6, "description": "nc_sameSiteCookielax cookie"},
+      {"kind": "html", "pattern": "content=[\"']Nextcloud", "weight": 0.8, "description": "Nextcloud branding/meta tag in page"},
+      {"kind": "path", "pattern": "/status.php", "weight": 0.9, "description": "/status.php reports a Nextcloud/ownCloud installation", "expect_in_body": "\"installed\"\\s*:\\s*true"}
+    ]
+  },
+  "CodeIgniter": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "ci_session", "weight": 0.75, "description": "ci_session cookie (CodeIgniter default session name)"}
+    ]
+  },
+  "CakePHP": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "\\bCAKEPHP=", "weight": 0.75, "description": "CAKEPHP cookie"}
+    ]
+  },
+  "TYPO3": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "fe_typo_user", "weight": 0.75, "description": "fe_typo_user cookie (TYPO3 frontend session)"},
+      {"kind": "html", "pattern": "TYPO3 CMS", "weight": 0.85, "description": "generator meta/text: TYPO3 CMS"},
+      {"kind": "path", "pattern": "/typo3/", "weight": 0.5, "description": "/typo3/ backend path reachable"}
+    ]
+  },
+  "Roundcube": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "roundcube_sessid", "weight": 0.8, "description": "roundcube_sessid cookie"},
+      {"kind": "html", "pattern": "Roundcube Webmail", "weight": 0.85, "description": "Roundcube Webmail branding in page"}
     ]
   }
 }

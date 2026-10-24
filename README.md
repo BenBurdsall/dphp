@@ -7,15 +7,16 @@ A small toolkit for finding PHP backends:
 - **`urls`** — fingerprint a URL, or a list of URLs, for an exposed PHP
   backend and the CMS/framework on top of it (WordPress, WooCommerce,
   Drupal, Joomla, Magento, MediaWiki, phpBB, vBulletin, MyBB, Laravel,
-  Symfony, Moodle, ...), then cross-check the detected PHP version
-  against a small CVE database.
+  Symfony, Moodle, phpMyAdmin, Nextcloud, CodeIgniter, CakePHP, TYPO3,
+  Roundcube, ...), then cross-check the detected PHP version against a
+  small CVE database.
 
 ## ⚠️ Authorization
 
 `urls` mode only sends ordinary GET requests and reads response
 headers/cookies/HTML — the same thing a browser does, never an exploit
-payload. Even so, **only point it at hosts you own or are explicitly
-authorized to test.**
+payload, with one exception (`--permission`, see below). Even so,
+**only point it at hosts you own or are explicitly authorized to test.**
 
 ## Usage
 
@@ -32,16 +33,49 @@ python detect.py urls my_urls.txt
 # machine-readable output
 python detect.py urls my_urls.txt --json
 python detect.py urls my_urls.txt --csv results.csv
+
+# last-resort higher-intensity probe, only with explicit permission (see Tier 4 below)
+python detect.py urls my_urls.txt --permission
 ```
 
-That's the whole interface — no scan tuning flags. Every URL gets one
-GET request. If the headers/cookies/HTML from that single request are
-already a confident PHP/CMS match, the scan stops there. If they're
-ambiguous, phpDetector automatically escalates to a second round of GET
-requests to a handful of well-known CMS paths (`/wp-login.php`,
-`/administrator/`, `/wiki/`, ...) to gather stronger evidence, and
-compares them against a baseline nonexistent path so a WAF or catch-all
-route that answers every path identically doesn't look like a match.
+### How a scan escalates
+
+Every URL gets one GET request. If that's already a confident PHP/CMS
+match, the scan stops there. Otherwise it escalates through further
+tiers, each firing only if the previous one was still ambiguous — so a
+confident target never pays for the later tiers:
+
+1. **Passive** (always). Cookies/headers/HTML from the one request,
+   scored against `data/fingerprints.json`, plus a free check of
+   whether the URL itself ends in `.php`.
+2. **CMS structural paths** (if still ambiguous). Probe well-known paths
+   for the CMS/framework list below (`/wp-login.php`, `/administrator/`,
+   `/wiki/`, ...), plus one nonexistent-path baseline so a WAF or
+   catch-all route that answers every path identically isn't mistaken
+   for a hit.
+3. **Generic structural checks** (if still ambiguous). A handful of
+   low-intensity, CMS-agnostic probes: a nonexistent `.php` path vs. the
+   nonexistent `.html` baseline (a PHP backend may answer differently);
+   requesting `/index.php` directly (a 200 or a redirect suggests PHP is
+   serving the site); comparing the 404 body against a default
+   Apache/nginx template (a custom one weakly corroborates a dynamic
+   backend); and a trailing-slash redirect check. All ordinary GETs, one
+   or two extra requests total.
+4. **`--permission` only, and only if still ambiguous after tier 3.**
+   Appends an array-typed query parameter (`?phpdetector_probe[]=1`) to
+   the *original* URL. Some PHP apps run a blanket sanitization/type
+   check over all of `$_GET`; feeding one a value typed as an array
+   instead of a scalar can make PHP leak a warning with a file path and
+   line number. Most production sites hide this (`display_errors` off),
+   so an empty result is the common case — this is a last resort, not a
+   reliable technique, and it's the one check in this tool that isn't
+   just an ordinary request: it's noisy enough to show up in logs. It
+   never fires without the flag.
+
+**Deliberately not implemented, even opt-in:** probing for a specific
+known exposure like `/phpinfo.php` or `/composer.json`. That's hunting
+for one site's accidental misconfiguration rather than fingerprinting
+what's running, and doesn't belong in a general scanner.
 
 ## How detection works
 
