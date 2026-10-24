@@ -21,17 +21,17 @@ authorized to test.**
 
 ```bash
 # local files
-python main.py files [path]            # default: current directory
+python detect.py files [path]            # default: current directory
 
 # a single URL
-python main.py urls https://example.com
+python detect.py urls https://example.com
 
 # a list of URLs (one per line, '#' comments allowed) -- see urls.example.txt
-python main.py urls my_urls.txt
+python detect.py urls my_urls.txt
 
 # machine-readable output
-python main.py urls my_urls.txt --json
-python main.py urls my_urls.txt --csv results.csv
+python detect.py urls my_urls.txt --json
+python detect.py urls my_urls.txt --csv results.csv
 ```
 
 That's the whole interface — no scan tuning flags. Every URL gets one

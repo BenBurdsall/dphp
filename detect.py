@@ -13,8 +13,8 @@ when that first pass is ambiguous. Only point it at hosts you own or are
 explicitly authorized to test.
 
 Usage:
-    python main.py urls https://example.com
-    python main.py urls my_urls.txt
+    python detect.py urls https://example.com
+    python detect.py urls my_urls.txt
 """
 import argparse
 import sys
