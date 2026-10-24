@@ -33,14 +33,17 @@ def to_console(results: list[ScanResult]) -> str:
             f"[PHP]          {r.url} -- backend probability {r.php_probability:.0%}"
             f"{version_note} (status {r.status_code}){tier_note}"
         )
-        if r.url_hint:
-            lines.append(f"               hint: {r.url_hint}")
-        for m in r.engine_matches:
-            lines.append(f"               engine: {m.name} (confidence {m.score:.0%})")
-            for ev in m.evidence:
-                lines.append(f"                 - {ev}")
-        for ev in r.structural_evidence:
-            lines.append(f"               structural: {ev}")
+
+        signals = r.positive_signals
+        if signals:
+            lines.append("               Why this score (signals that contributed positively, highest weight first):")
+            for weight, description in signals:
+                lines.append(f"                 - [{weight:.0%}] {description}")
+            lines.append(
+                f"               Summary: {len(signals)} positive signal(s), combined via noisy-OR "
+                f"(1 - product of (1 - weight)) -> {r.php_probability:.0%} overall."
+            )
+
         for cve in r.cve_assessments:
             lines.append(f"               {cve.cve_id}: risk {cve.risk_score:.0%} -- {cve.label}")
 
@@ -57,15 +60,29 @@ def to_console(results: list[ScanResult]) -> str:
     return "\n".join(lines)
 
 
+def _weighted(pairs: list[tuple[float, str]]) -> list[dict]:
+    return [{"weight": w, "description": d} for w, d in pairs]
+
+
 def to_json(results: list[ScanResult]) -> str:
-    return json.dumps([asdict(r) for r in results], indent=2)
+    payload = []
+    for r in results:
+        data = asdict(r)
+        for m in data["engine_matches"]:
+            m["evidence"] = _weighted(m["evidence"])
+        data["structural_evidence"] = _weighted(data["structural_evidence"])
+        # positive_signals is a derived property (not a dataclass field), so
+        # asdict() won't pick it up -- add it explicitly for JSON consumers.
+        data["positive_signals"] = _weighted(r.positive_signals)
+        payload.append(data)
+    return json.dumps(payload, indent=2)
 
 
 def write_csv(results: list[ScanResult], path: Path) -> None:
     fieldnames = [
         "url", "reachable", "status_code", "php_version", "php_probability",
-        "probed_paths", "structural_probed", "permission_probe_used", "url_hint",
-        "engines", "structural_evidence", "cve_risks", "error",
+        "probed_paths", "structural_probed", "permission_probe_used",
+        "engines", "positive_signals", "cve_risks", "error",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -80,9 +97,8 @@ def write_csv(results: list[ScanResult], path: Path) -> None:
                 "probed_paths": r.probed_paths,
                 "structural_probed": r.structural_probed,
                 "permission_probe_used": r.permission_probe_used,
-                "url_hint": r.url_hint,
                 "engines": "; ".join(f"{m.name}:{m.score:.2f}" for m in r.engine_matches),
-                "structural_evidence": "; ".join(r.structural_evidence),
+                "positive_signals": "; ".join(f"{w:.2f}:{d}" for w, d in r.positive_signals),
                 "cve_risks": "; ".join(f"{c.cve_id}:{c.risk_score:.2f}:{c.label}" for c in r.cve_assessments),
                 "error": r.error,
             })

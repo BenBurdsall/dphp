@@ -124,12 +124,27 @@ class ScanResult:
     cve_assessments: list[CVEAssessment] = field(default_factory=list)
     headers: dict = field(default_factory=dict)
     url_hint: Optional[str] = None  # e.g. "requested URL itself ends in .php"
-    structural_evidence: list[str] = field(default_factory=list)  # reasons from tiers 3 and 4
+    structural_evidence: list[tuple[float, str]] = field(default_factory=list)  # (weight, reason) from tiers 3-4
     error: Optional[str] = None
 
     @property
     def php_detected(self) -> bool:
         return self.php_probability >= PHP_CONFIDENCE_THRESHOLD
+
+    @property
+    def positive_signals(self) -> list[tuple[float, str]]:
+        """Every (weight, description) pair that contributed positively to
+        php_probability, across every tier, highest weight first -- a flat
+        "why this score" view instead of per-tier/per-engine fragments."""
+        signals: list[tuple[float, str]] = []
+        for m in self.engine_matches:
+            for weight, description in m.evidence:
+                signals.append((weight, f"{description} ({m.name})"))
+        if self.url_hint:
+            signals.append((URL_EXTENSION_WEIGHT, self.url_hint))
+        signals.extend(self.structural_evidence)
+        signals.sort(key=lambda pair: pair[0], reverse=True)
+        return signals
 
 
 def _extract_php_version(headers: dict) -> Optional[str]:
@@ -188,33 +203,33 @@ def _probe_raw(base_url: str, path: str, timeout: float, user_agent: str) -> tup
 
 def _structural_signals(
     url: str, token: str, baseline_status: Optional[int], baseline_body: str, timeout: float, user_agent: str
-) -> tuple[float, list[str]]:
+) -> tuple[float, list[tuple[float, str]]]:
     """Tier 3: low-intensity, generic structural probes. One or two extra
     GET requests, reusing `token`/`baseline_status`/`baseline_body` from
-    tier 2 rather than re-fetching them."""
-    weights: list[float] = []
-    evidence: list[str] = []
+    tier 2 rather than re-fetching them.
+
+    Returns (combined score, evidence), evidence being a list of (weight,
+    description) pairs -- same contract as `fingerprints.evaluate_engine`.
+    """
+    evidence: list[tuple[float, str]] = []
 
     # 1. Extension behaviour: a nonexistent .php path vs the nonexistent
     #    .html baseline from tier 2. A PHP backend may answer differently.
     php_status, _, php_body = _probe_raw(url, f"/phpdetector-ext-check-{token}.php", timeout, user_agent)
     if php_status is not None and baseline_status is not None and php_status != baseline_status:
-        weights.append(EXTENSION_BEHAVIOR_WEIGHT)
-        evidence.append(
-            f"nonexistent .php path gets a different status than .html ({php_status} vs {baseline_status})"
-        )
+        evidence.append((
+            EXTENSION_BEHAVIOR_WEIGHT,
+            f"nonexistent .php path gets a different status than .html ({php_status} vs {baseline_status})",
+        ))
     elif php_body and baseline_body and php_body != baseline_body and _looks_like_php_error(php_body):
-        weights.append(EXTENSION_BEHAVIOR_WEIGHT)
-        evidence.append("nonexistent .php path triggers a PHP-style error body that .html doesn't")
+        evidence.append((EXTENSION_BEHAVIOR_WEIGHT, "nonexistent .php path triggers a PHP-style error body that .html doesn't"))
 
     # 2. Front controller routing: request /index.php directly.
     index_status, _, _ = _probe_raw(url, "/index.php", timeout, user_agent)
     if index_status == 200:
-        weights.append(FRONT_CONTROLLER_200_WEIGHT)
-        evidence.append("/index.php returns 200 directly")
+        evidence.append((FRONT_CONTROLLER_200_WEIGHT, "/index.php returns 200 directly"))
     elif index_status is not None and 300 <= index_status < 400:
-        weights.append(FRONT_CONTROLLER_REDIRECT_WEIGHT)
-        evidence.append(f"/index.php redirects ({index_status}) instead of 404ing")
+        evidence.append((FRONT_CONTROLLER_REDIRECT_WEIGHT, f"/index.php redirects ({index_status}) instead of 404ing"))
 
     # 3. Error page fingerprint: is the 404 a default Apache/nginx
     #    template, or something custom-rendered? Weak and non-specific --
@@ -225,8 +240,10 @@ def _structural_signals(
             _DEFAULT_APACHE_404_RE.search(baseline_body) or _DEFAULT_NGINX_404_RE.search(baseline_body)
         )
         if not is_default:
-            weights.append(CUSTOM_ERROR_PAGE_WEIGHT)
-            evidence.append("404 page isn't a default Apache/nginx template (custom/application-rendered)")
+            evidence.append((
+                CUSTOM_ERROR_PAGE_WEIGHT,
+                "404 page isn't a default Apache/nginx template (custom/application-rendered)",
+            ))
 
     # 4. Trailing-slash behaviour -- weaker evidence, only helps ambiguous cases.
     slash_path = f"/phpdetector-slash-check-{token}"
@@ -234,13 +251,12 @@ def _structural_signals(
     if slash_status is not None and 300 <= slash_status < 400 and slash_location and slash_location.rstrip("/").endswith(
         slash_path
     ):
-        weights.append(TRAILING_SLASH_WEIGHT)
-        evidence.append("a nonexistent path without a trailing slash redirects to the same path with one")
+        evidence.append((TRAILING_SLASH_WEIGHT, "a nonexistent path without a trailing slash redirects to the same path with one"))
 
-    return combine_noisy_or(weights), evidence
+    return combine_noisy_or([w for w, _ in evidence]), evidence
 
 
-def _malformed_input_signal(url: str, timeout: float, user_agent: str) -> tuple[float, list[str]]:
+def _malformed_input_signal(url: str, timeout: float, user_agent: str) -> tuple[float, list[tuple[float, str]]]:
     """Tier 4 (--permission only): append an array-typed query parameter
     to the ORIGINAL target URL. Some PHP apps run a blanket
     sanitization/type check over all of $_GET regardless of parameter
@@ -259,7 +275,8 @@ def _malformed_input_signal(url: str, timeout: float, user_agent: str) -> tuple[
 
     body = resp.text[:MAX_PROBE_BODY_CHARS] if resp.text else ""
     if body and _looks_like_php_error(body):
-        return MALFORMED_INPUT_WEIGHT, ["an array-typed query parameter triggered a PHP warning/error leak"]
+        description = "an array-typed query parameter triggered a PHP warning/error leak"
+        return MALFORMED_INPUT_WEIGHT, [(MALFORMED_INPUT_WEIGHT, description)]
     return 0.0, []
 
 

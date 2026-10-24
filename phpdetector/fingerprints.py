@@ -63,7 +63,7 @@ class EngineFingerprint:
 class EngineMatch:
     name: str
     score: float
-    evidence: list[str] = field(default_factory=list)
+    evidence: list[tuple[float, str]] = field(default_factory=list)  # (signal weight, description)
 
 
 def load_engine_db(path: Path = DEFAULT_DB_PATH) -> list[EngineFingerprint]:
@@ -109,8 +109,13 @@ def evaluate_engine(
     body_text: str,
     path_probe_results: dict | None = None,
     baseline_status: int | None = None,
-) -> tuple[float, list[str]]:
+) -> tuple[float, list[tuple[float, str]]]:
     """Score one engine against the evidence gathered for a URL.
+
+    Returns (combined score, evidence), where evidence is a list of
+    (signal weight, description) pairs -- one per signal that actually
+    matched, so callers can show exactly which facts contributed and how
+    much weight each one carried, not just the final combined score.
 
     `path_probe_results` maps a probed path to (status_code, body) or is
     absent/None for a path that wasn't probed -- PATH signals are simply
@@ -124,25 +129,21 @@ def evaluate_engine(
     look like every engine's paths exist at once.
     """
     path_probe_results = path_probe_results or {}
-    matched_weights: list[float] = []
-    evidence: list[str] = []
+    evidence: list[tuple[float, str]] = []
 
     for sig in engine.signals:
         if sig.kind is SignalKind.COOKIE:
             if cookie_text and re.search(sig.pattern, cookie_text, re.IGNORECASE):
-                matched_weights.append(sig.weight)
-                evidence.append(sig.description)
+                evidence.append((sig.weight, sig.description))
 
         elif sig.kind is SignalKind.HEADER:
             value = headers.get(sig.header_name, "")
             if value and re.search(sig.pattern, value, re.IGNORECASE):
-                matched_weights.append(sig.weight)
-                evidence.append(sig.description)
+                evidence.append((sig.weight, sig.description))
 
         elif sig.kind is SignalKind.HTML:
             if body_text and re.search(sig.pattern, body_text, re.IGNORECASE):
-                matched_weights.append(sig.weight)
-                evidence.append(sig.description)
+                evidence.append((sig.weight, sig.description))
 
         elif sig.kind is SignalKind.PATH:
             probe = path_probe_results.get(sig.pattern)
@@ -155,10 +156,9 @@ def evaluate_engine(
                 continue
             if sig.expect_in_body and not re.search(sig.expect_in_body, probe_body or "", re.IGNORECASE):
                 continue
-            matched_weights.append(sig.weight)
-            evidence.append(sig.description)
+            evidence.append((sig.weight, sig.description))
 
-    return combine_noisy_or(matched_weights), evidence
+    return combine_noisy_or([w for w, _ in evidence]), evidence
 
 
 def evaluate_all_engines(

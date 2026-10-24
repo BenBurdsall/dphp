@@ -220,7 +220,7 @@ def test_leaked_fatal_error_detected_from_baseline_probe_body():
         result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
 
     assert result.php_probability == pytest.approx(0.9)
-    assert result.engine_matches and result.engine_matches[0].evidence == ["PHP fatal error leaked"]
+    assert result.engine_matches and result.engine_matches[0].evidence == [(0.9, "PHP fatal error leaked")]
 
 
 # --- tier 3: structural probes (only fire if tiers 1-2 stay ambiguous) ---
@@ -238,7 +238,7 @@ def test_front_controller_200_is_detected():
 
     assert result.structural_probed is True
     assert result.php_probability == pytest.approx(FRONT_CONTROLLER_200_WEIGHT)
-    assert "/index.php returns 200 directly" in result.structural_evidence
+    assert any(d == "/index.php returns 200 directly" for _, d in result.structural_evidence)
 
 
 def test_extension_behavior_difference_is_detected():
@@ -255,7 +255,7 @@ def test_extension_behavior_difference_is_detected():
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
     assert result.php_probability == pytest.approx(EXTENSION_BEHAVIOR_WEIGHT)
-    assert any("different status" in e for e in result.structural_evidence)
+    assert any("different status" in d for _, d in result.structural_evidence)
 
 
 def test_custom_error_page_is_detected():
@@ -271,7 +271,7 @@ def test_custom_error_page_is_detected():
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
     assert result.php_probability == pytest.approx(CUSTOM_ERROR_PAGE_WEIGHT)
-    assert any("isn't a default Apache/nginx template" in e for e in result.structural_evidence)
+    assert any("isn't a default Apache/nginx template" in d for _, d in result.structural_evidence)
 
 
 def test_default_apache_404_page_is_not_flagged_as_custom():
@@ -312,7 +312,7 @@ def test_trailing_slash_redirect_is_detected():
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
     assert result.php_probability == pytest.approx(TRAILING_SLASH_WEIGHT)
-    assert any("trailing slash" in e for e in result.structural_evidence)
+    assert any("trailing slash" in d for _, d in result.structural_evidence)
 
 
 def test_structural_probes_do_not_fire_on_a_confident_first_pass():
@@ -358,7 +358,7 @@ def test_permission_probe_fires_when_enabled_and_still_ambiguous():
     assert mock_get.call_count == 6
     assert result.permission_probe_used is True
     assert result.php_probability == pytest.approx(MALFORMED_INPUT_WEIGHT)
-    assert any("array-typed query parameter" in e for e in result.structural_evidence)
+    assert any("array-typed query parameter" in d for _, d in result.structural_evidence)
 
 
 def test_permission_probe_skipped_when_already_confident():
@@ -370,3 +370,36 @@ def test_permission_probe_skipped_when_already_confident():
 
     assert mock_get.call_count == 1
     assert result.permission_probe_used is False
+
+
+# --- positive_signals: the unified "why this score" view ---
+
+def test_positive_signals_aggregates_every_tier_sorted_by_weight():
+    engine_db = [
+        EngineFingerprint("WordPress", signals=[
+            Signal(SignalKind.COOKIE, "wordpress_logged_in_", 0.85, "wordpress_logged_in_ cookie"),
+        ]),
+    ]
+    homepage = _mock_response(
+        headers={}, cookies=["wordpress_logged_in_abc"], body="nothing interesting here",
+    )
+
+    with patch("phpdetector.scanner.requests.get", return_value=homepage):
+        result = scan_one("http://example.test/index.php", cve_db=[], engine_db=engine_db)
+
+    signals = result.positive_signals
+    # Highest weight first: the URL-extension hint (0.9) beats the cookie match (0.85).
+    assert [w for w, _ in signals] == sorted((w for w, _ in signals), reverse=True)
+    descriptions = [d for _, d in signals]
+    assert any("wordpress_logged_in_ cookie" in d and "WordPress" in d for d in descriptions)
+    assert any(d == "requested URL itself ends in .php" for d in descriptions)
+
+
+def test_positive_signals_empty_when_nothing_matched():
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    not_found = _mock_response(status=404, body="")
+
+    with patch("phpdetector.scanner.requests.get", side_effect=[homepage] + [not_found] * 10):
+        result = scan_one("http://example.test", cve_db=[], engine_db=[])
+
+    assert result.positive_signals == []

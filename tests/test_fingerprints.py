@@ -29,7 +29,7 @@ def test_evaluate_engine_cookie_signal():
     ])
     score, evidence = evaluate_engine(engine, headers={}, cookie_text="MoodleSession=abc123", body_text="")
     assert score == pytest.approx(0.85)
-    assert evidence == ["MoodleSession cookie"]
+    assert evidence == [(0.85, "MoodleSession cookie")]
 
 
 def test_evaluate_engine_no_match():

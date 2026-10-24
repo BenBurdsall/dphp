@@ -91,6 +91,27 @@ These weights are hand-set priors based on how unique each artifact is
 in practice, not an empirically calibrated model — treat the resulting
 score as a triage aid for prioritizing manual review, not ground truth.
 
+### Why this score
+
+Every URL that shows any PHP-backend evidence gets a "Why this score"
+breakdown: every signal that matched, across every tier (headers,
+cookies, HTML, the URL's own extension, CMS paths, the tier 3/4
+structural checks), with the weight it individually contributed, sorted
+highest first, followed by a one-line summary of how those combined.
+Nothing is listed that didn't actually contribute — there's no
+"signals considered but rejected" noise. The same breakdown is available
+to scripts: `--json`'s `positive_signals` field and `--csv`'s
+`positive_signals` column carry the identical (weight, description)
+pairs.
+
+```
+[PHP]          https://example.com -- backend probability 92% (status 200)
+               Why this score (signals that contributed positively, highest weight first):
+                 - [90%] generator meta tag: WordPress (WordPress)
+                 - [85%] wordpress_logged_in_ cookie (WordPress)
+               Summary: 2 positive signal(s), combined via noisy-OR (1 - product of (1 - weight)) -> 92% overall.
+```
+
 ## CVE cross-check
 
 `data/vulnerabilities.json` holds the CVEs to check detected PHP
