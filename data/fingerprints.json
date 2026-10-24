@@ -1,0 +1,111 @@
+{
+  "PHP": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "header", "header_name": "X-Powered-By", "pattern": "PHP/\\d", "weight": 0.95, "description": "X-Powered-By header includes a PHP version token"},
+      {"kind": "header", "header_name": "Server", "pattern": "PHP/\\d", "weight": 0.95, "description": "Server header includes a PHP version token"},
+      {"kind": "header", "header_name": "X-Powered-By", "pattern": "php", "weight": 0.6, "description": "X-Powered-By header mentions PHP without a version"},
+      {"kind": "header", "header_name": "Server", "pattern": "php", "weight": 0.5, "description": "Server header mentions PHP without a version"},
+      {"kind": "cookie", "pattern": "PHPSESSID=", "weight": 0.75, "description": "PHPSESSID cookie present (default PHP session cookie name)"}
+    ]
+  },
+  "WordPress": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "wordpress_test_cookie", "weight": 0.6, "description": "wordpress_test_cookie present"},
+      {"kind": "cookie", "pattern": "wp-settings-", "weight": 0.6, "description": "wp-settings-* cookie"},
+      {"kind": "cookie", "pattern": "wordpress_logged_in_", "weight": 0.85, "description": "wordpress_logged_in_* cookie (authenticated session)"},
+      {"kind": "html", "pattern": "<meta[^>]+name=[\"']generator[\"'][^>]*content=[\"']WordPress", "weight": 0.9, "description": "generator meta tag: WordPress"},
+      {"kind": "path", "pattern": "/wp-login.php", "weight": 0.6, "description": "/wp-login.php reachable"},
+      {"kind": "path", "pattern": "/wp-content/", "weight": 0.5, "description": "/wp-content/ reachable"},
+      {"kind": "path", "pattern": "/wp-includes/", "weight": 0.5, "description": "/wp-includes/ reachable"},
+      {"kind": "path", "pattern": "/wp-json/", "weight": 0.6, "description": "/wp-json/ REST API reachable"}
+    ]
+  },
+  "WooCommerce": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "woocommerce_cart_hash", "weight": 0.85, "description": "woocommerce_cart_hash cookie"},
+      {"kind": "cookie", "pattern": "wp_woocommerce_session_", "weight": 0.85, "description": "wp_woocommerce_session_* cookie"}
+    ]
+  },
+  "Drupal": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "header", "header_name": "X-Generator", "pattern": "Drupal", "weight": 0.9, "description": "X-Generator: Drupal header"},
+      {"kind": "html", "pattern": "/core/misc/drupal\\.js", "weight": 0.7, "description": "/core/misc/drupal.js referenced in page"},
+      {"kind": "html", "pattern": "/sites/default/files/", "weight": 0.5, "description": "/sites/default/files/ path referenced"},
+      {"kind": "cookie", "pattern": "\\bS{1,2}ESS[0-9a-f]+=", "weight": 0.55, "description": "SESS.../SSESS... Drupal-style session cookie"}
+    ]
+  },
+  "Joomla": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "html", "pattern": "Joomla!\\s*-\\s*Open Source Content Management", "weight": 0.9, "description": "generator meta tag: Joomla!"},
+      {"kind": "path", "pattern": "/administrator/", "weight": 0.55, "description": "/administrator/ reachable"},
+      {"kind": "cookie", "pattern": "joomla_", "weight": 0.75, "description": "joomla_* cookie"}
+    ]
+  },
+  "Magento": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "html", "pattern": "/static/version", "weight": 0.6, "description": "/static/version path referenced"},
+      {"kind": "html", "pattern": "/pub/static/", "weight": 0.6, "description": "/pub/static/ path referenced"},
+      {"kind": "cookie", "pattern": "mage-cache-sessid", "weight": 0.8, "description": "mage-cache-sessid cookie"},
+      {"kind": "cookie", "pattern": "\\bform_key=", "weight": 0.35, "description": "form_key cookie (weak on its own)"},
+      {"kind": "html", "pattern": "\\bMage\\.", "weight": 0.5, "description": "Mage. reference in page source"}
+    ]
+  },
+  "MediaWiki": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "html", "pattern": "/index\\.php\\?title=", "weight": 0.6, "description": "/index.php?title= URL pattern referenced"},
+      {"kind": "path", "pattern": "/wiki/", "weight": 0.4, "description": "/wiki/ reachable"},
+      {"kind": "path", "pattern": "/w/", "weight": 0.4, "description": "/w/ reachable"},
+      {"kind": "cookie", "pattern": "UserID=", "weight": 0.6, "description": "<dbname>UserID cookie"},
+      {"kind": "cookie", "pattern": "_session=", "weight": 0.3, "description": "<dbname>_session cookie (weak on its own)"}
+    ]
+  },
+  "phpBB": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "phpbb3_\\w*_sid", "weight": 0.85, "description": "phpbb3_*_sid cookie"},
+      {"kind": "cookie", "pattern": "phpbb3_\\w*_u\\b", "weight": 0.75, "description": "phpbb3_*_u cookie"},
+      {"kind": "path", "pattern": "/styles/", "weight": 0.35, "description": "/styles/ reachable"}
+    ]
+  },
+  "vBulletin": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "bbsessionhash", "weight": 0.85, "description": "bbsessionhash cookie"},
+      {"kind": "cookie", "pattern": "bblastvisit", "weight": 0.75, "description": "bblastvisit cookie"}
+    ]
+  },
+  "MyBB": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "mybb\\[lastvisit\\]", "weight": 0.85, "description": "mybb[lastvisit] cookie"},
+      {"kind": "path", "pattern": "/inc/", "weight": 0.35, "description": "/inc/ reachable"}
+    ]
+  },
+  "Laravel": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "laravel_session", "weight": 0.85, "description": "laravel_session cookie"},
+      {"kind": "cookie", "pattern": "XSRF-TOKEN", "weight": 0.4, "description": "XSRF-TOKEN cookie (weak on its own)"}
+    ]
+  },
+  "Symfony": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "REMEMBERME", "weight": 0.5, "description": "REMEMBERME cookie (remember-me login)"}
+    ]
+  },
+  "Moodle": {
+    "implies_php": true,
+    "signals": [
+      {"kind": "cookie", "pattern": "MoodleSession", "weight": 0.85, "description": "MoodleSession cookie"},
+      {"kind": "path", "pattern": "/theme/", "weight": 0.4, "description": "/theme/ reachable"}
+    ]
+  }
+}

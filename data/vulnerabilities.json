@@ -1,0 +1,18 @@
+{
+  "CVE-2026-109618": {
+    "title": "PHP out-of-memory handling remote code execution",
+    "severity": "Critical",
+    "cvss_v4": 9.2,
+    "summary": "Flaw in how PHP handles out-of-memory conditions during request processing. The CNA advisory states that all PHP installations serving web requests are potentially at risk. PLACEHOLDER: affected_versions below is UNKNOWN until confirmed against the authoritative PHP advisory / NVD entry -- do not treat 'UNKNOWN' as 'not vulnerable'.",
+    "affected_versions": "UNKNOWN",
+    "references": []
+  },
+  "CVE-2026-109619": {
+    "title": "PHP use-after-free leading to cross-request data exposure",
+    "severity": "UNKNOWN",
+    "cvss_v4": null,
+    "summary": "Use-after-free bug where data left behind by one web request can be accessed during another request, potentially leading to code execution. PLACEHOLDER: affected_versions below is UNKNOWN until confirmed against the authoritative PHP advisory / NVD entry -- do not treat 'UNKNOWN' as 'not vulnerable'.",
+    "affected_versions": "UNKNOWN",
+    "references": []
+  }
+}
