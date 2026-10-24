@@ -106,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="phpDetector",
         description="Detect PHP locally, or fingerprint URLs for an exposed/vulnerable PHP backend.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     files_parser = sub.add_parser("files", help="Scan local files/directories for PHP")
     files_parser.add_argument(
@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        return 0
     return args.func(args)
 
 
