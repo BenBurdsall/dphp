@@ -13,10 +13,11 @@ as early as possible):
      to tell a real hit apart from a WAF/catch-all answering every path
      alike.
   3. Still ambiguous: a handful of low-intensity, generic structural
-     checks -- comparing a nonexistent .php path against the nonexistent
-     .html baseline, requesting /index.php directly, comparing the 404
-     body against a default Apache/nginx template, and a trailing-slash
-     redirect check. One or two extra requests, all still ordinary GETs.
+     checks -- comparing a nonexistent .php path against a nonexistent
+     .html path (both raw, pre-redirect), requesting /index.php directly,
+     comparing the 404 body against a default Apache/nginx template, and
+     a trailing-slash redirect check. A few extra requests, all still
+     ordinary GETs.
   4. Only with `permission=True` (CLI: `--permission`), and only if still
      ambiguous after tier 3: append an array-typed query parameter to the
      *original* URL to see if it makes the backend leak a PHP warning
@@ -202,42 +203,76 @@ def _probe_raw(base_url: str, path: str, timeout: float, user_agent: str) -> tup
 
 
 def _structural_signals(
-    url: str, token: str, baseline_status: Optional[int], baseline_body: str, timeout: float, user_agent: str
+    url: str,
+    token: str,
+    followed_baseline_status: Optional[int],
+    followed_baseline_body: str,
+    timeout: float,
+    user_agent: str,
 ) -> tuple[float, list[tuple[float, str]]]:
-    """Tier 3: low-intensity, generic structural probes. One or two extra
-    GET requests, reusing `token`/`baseline_status`/`baseline_body` from
-    tier 2 rather than re-fetching them.
+    """Tier 3: low-intensity, generic structural probes. A few extra GET
+    requests.
+
+    `followed_baseline_status`/`followed_baseline_body` are tier 2's
+    baseline, measured WITH redirects followed (same as the CMS path
+    probes) -- used here only for the error-page-fingerprint check, which
+    wants to see the actual rendered "not found" content.
+
+    The extension-behaviour and front-controller checks below care about
+    raw, pre-redirect status codes instead, so they fetch their own fresh
+    raw baseline rather than reusing tier 2's -- mixing the two was a real
+    bug: a site that redirects every nonexistent path (including a
+    genuinely random one) to one fixed "page not found" URL, which then
+    returns 200 (common on enterprise sites, e.g. tescobank.com -> a 302
+    to /oops/page-not-found/), would show status 200 for every real CMS
+    path probe (which follows that redirect) while the old raw-only
+    baseline stayed at 302 -- so they never matched, and every CMS engine
+    looked like a hit. Comparing raw-to-raw and followed-to-followed
+    consistently is what actually catches that.
 
     Returns (combined score, evidence), evidence being a list of (weight,
     description) pairs -- same contract as `fingerprints.evaluate_engine`.
     """
     evidence: list[tuple[float, str]] = []
 
-    # 1. Extension behaviour: a nonexistent .php path vs the nonexistent
-    #    .html baseline from tier 2. A PHP backend may answer differently.
+    raw_baseline_status, _, raw_baseline_body = _probe_raw(
+        url, f"/phpdetector-raw-baseline-{token}.html", timeout, user_agent
+    )
+
+    # 1. Extension behaviour: a nonexistent .php path vs a nonexistent
+    #    .html path, both raw. A PHP backend may answer differently --
+    #    but only if it answers differently from ANY nonexistent path,
+    #    not just because both happen to be caught by a blanket redirect.
     php_status, _, php_body = _probe_raw(url, f"/phpdetector-ext-check-{token}.php", timeout, user_agent)
-    if php_status is not None and baseline_status is not None and php_status != baseline_status:
+    if php_status is not None and raw_baseline_status is not None and php_status != raw_baseline_status:
         evidence.append((
             EXTENSION_BEHAVIOR_WEIGHT,
-            f"nonexistent .php path gets a different status than .html ({php_status} vs {baseline_status})",
+            f"nonexistent .php path gets a different raw status than .html ({php_status} vs {raw_baseline_status})",
         ))
-    elif php_body and baseline_body and php_body != baseline_body and _looks_like_php_error(php_body):
+    elif (
+        php_body and raw_baseline_body and php_body != raw_baseline_body and _looks_like_php_error(php_body)
+    ):
         evidence.append((EXTENSION_BEHAVIOR_WEIGHT, "nonexistent .php path triggers a PHP-style error body that .html doesn't"))
 
-    # 2. Front controller routing: request /index.php directly.
+    # 2. Front controller routing: request /index.php directly. Only
+    #    meaningful if it behaves differently from the raw baseline --
+    #    e.g. a blanket "every path redirects/200s the same way" site
+    #    makes /index.php returning 200 (or redirecting) uninformative.
     index_status, _, _ = _probe_raw(url, "/index.php", timeout, user_agent)
-    if index_status == 200:
-        evidence.append((FRONT_CONTROLLER_200_WEIGHT, "/index.php returns 200 directly"))
-    elif index_status is not None and 300 <= index_status < 400:
-        evidence.append((FRONT_CONTROLLER_REDIRECT_WEIGHT, f"/index.php redirects ({index_status}) instead of 404ing"))
+    if index_status is not None and raw_baseline_status is not None and index_status != raw_baseline_status:
+        if index_status == 200:
+            evidence.append((FRONT_CONTROLLER_200_WEIGHT, "/index.php returns 200 directly"))
+        elif 300 <= index_status < 400:
+            evidence.append((FRONT_CONTROLLER_REDIRECT_WEIGHT, f"/index.php redirects ({index_status}) instead of 404ing"))
 
-    # 3. Error page fingerprint: is the 404 a default Apache/nginx
-    #    template, or something custom-rendered? Weak and non-specific --
-    #    any dynamic backend can have a custom 404, not just PHP -- so it
-    #    only ever corroborates other evidence, never carries a result alone.
-    if baseline_status == 404 and baseline_body and len(baseline_body) > 200:
+    # 3. Error page fingerprint: is the (followed) 404 a default
+    #    Apache/nginx template, or something custom-rendered? Weak and
+    #    non-specific -- any dynamic backend can have a custom 404, not
+    #    just PHP -- so it only ever corroborates other evidence, never
+    #    carries a result alone.
+    if followed_baseline_status == 404 and followed_baseline_body and len(followed_baseline_body) > 200:
         is_default = bool(
-            _DEFAULT_APACHE_404_RE.search(baseline_body) or _DEFAULT_NGINX_404_RE.search(baseline_body)
+            _DEFAULT_APACHE_404_RE.search(followed_baseline_body) or _DEFAULT_NGINX_404_RE.search(followed_baseline_body)
         )
         if not is_default:
             evidence.append((
@@ -245,7 +280,10 @@ def _structural_signals(
                 "404 page isn't a default Apache/nginx template (custom/application-rendered)",
             ))
 
-    # 4. Trailing-slash behaviour -- weaker evidence, only helps ambiguous cases.
+    # 4. Trailing-slash behaviour -- weaker evidence, only helps ambiguous
+    #    cases. Already self-guarding: a blanket redirect-everywhere-to-
+    #    one-fixed-URL site won't satisfy the "redirects to this same
+    #    path plus a slash" check below.
     slash_path = f"/phpdetector-slash-check-{token}"
     slash_status, slash_location, _ = _probe_raw(url, slash_path, timeout, user_agent)
     if slash_status is not None and 300 <= slash_status < 400 and slash_location and slash_location.rstrip("/").endswith(
@@ -340,11 +378,18 @@ def scan_one(
         # Its body is folded into the HTML evidence too -- a server that
         # leaks a PHP error/stack-trace for an unknown path (display_errors
         # left on) hands us that signal for free, from a request we're
-        # already making. Not following redirects here: tier 3 needs the
-        # raw first-hop status, and in practice a direct 404 (the normal
-        # case) behaves identically either way.
+        # already making. Follows redirects, matching the CMS path probes
+        # below -- comparing a redirect-following baseline against
+        # redirect-following probes is what makes the dedup valid. (Using
+        # a raw, non-following baseline here was a real bug: a site that
+        # redirects every nonexistent path, including a random one, to a
+        # single "page not found" URL that returns 200 would show 200 for
+        # every CMS path probe while the raw baseline stayed at the
+        # redirect's own status -- they'd never match, so every CMS
+        # engine would look like a hit. Tier 3 fetches its own separate
+        # raw baseline for the checks that specifically need that.)
         token = uuid.uuid4().hex[:12]
-        baseline_status, _, baseline_body = _probe_raw(
+        baseline_status, baseline_body = _probe_path(
             url, f"/phpdetector-baseline-check-{token}.html", timeout, user_agent
         )
         combined_body_text = f"{body_text}\n{baseline_body}" if baseline_body else body_text

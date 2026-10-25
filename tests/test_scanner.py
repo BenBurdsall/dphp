@@ -154,6 +154,45 @@ def test_waf_blanket_status_does_not_create_false_positive():
     assert result.structural_evidence == []
 
 
+def test_soft_404_via_redirect_does_not_create_false_positive():
+    """Real-world case (tescobank.com): every nonexistent path, including
+    a genuinely random one, redirects (302, raw) to one fixed "page not
+    found" URL, which itself returns 200 when the redirect is followed.
+    Comparing a raw baseline against followed CMS-path probes (or vice
+    versa) would make every single path look like a hit; comparing
+    consistently must not."""
+    engine_db = [
+        EngineFingerprint("WordPress", signals=[
+            Signal(SignalKind.PATH, "/wp-login.php", 0.6, "/wp-login.php reachable"),
+        ]),
+        EngineFingerprint("Joomla", signals=[
+            Signal(SignalKind.PATH, "/administrator/", 0.55, "/administrator/ reachable"),
+        ]),
+    ]
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    not_found_page = _mock_response(status=200, body="Oops, page not found. " + "x" * 200)
+    call_count = {"n": 0}
+
+    def side_effect(url, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return homepage
+        if kwargs.get("allow_redirects"):
+            # Followed: every path resolves to the same fixed 200 page.
+            return not_found_page
+        # Raw: every path 302s to that same fixed page first.
+        resp = _mock_response(status=302, body="")
+        resp.headers = {"Location": "/oops/page-not-found/"}
+        return resp
+
+    with patch("phpdetector.scanner.requests.get", side_effect=side_effect):
+        result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
+
+    assert result.php_probability == 0.0
+    assert result.engine_matches == []
+    assert result.structural_evidence == []
+
+
 def test_confident_first_pass_does_not_probe():
     engine_db = _php_header_engine_db()
     homepage = _mock_response(headers={"X-Powered-By": "PHP/8.3.0"})
@@ -227,12 +266,12 @@ def test_leaked_fatal_error_detected_from_baseline_probe_body():
 
 def test_front_controller_200_is_detected():
     homepage = _mock_response(headers={}, body="nothing interesting here")
-    not_found = _mock_response(status=404, body="")  # baseline, .php ext check
+    not_found = _mock_response(status=404, body="")  # tier2 baseline, tier3 raw baseline, .php ext check
     index_200 = _mock_response(status=200, body="")  # /index.php
 
     with patch(
         "phpdetector.scanner.requests.get",
-        side_effect=[homepage, not_found, not_found, index_200, not_found],
+        side_effect=[homepage, not_found, not_found, not_found, index_200, not_found],
     ):
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
@@ -243,19 +282,20 @@ def test_front_controller_200_is_detected():
 
 def test_extension_behavior_difference_is_detected():
     homepage = _mock_response(headers={}, body="nothing interesting here")
-    baseline_404 = _mock_response(status=404, body="")  # .html baseline
+    baseline_404 = _mock_response(status=404, body="")  # tier2 baseline
+    raw_baseline_404 = _mock_response(status=404, body="")  # tier3's own fresh raw baseline
     ext_500 = _mock_response(status=500, body="")  # .php gets a different status
     index_404 = _mock_response(status=404, body="")
     slash_404 = _mock_response(status=404, body="")
 
     with patch(
         "phpdetector.scanner.requests.get",
-        side_effect=[homepage, baseline_404, ext_500, index_404, slash_404],
+        side_effect=[homepage, baseline_404, raw_baseline_404, ext_500, index_404, slash_404],
     ):
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
     assert result.php_probability == pytest.approx(EXTENSION_BEHAVIOR_WEIGHT)
-    assert any("different status" in d for _, d in result.structural_evidence)
+    assert any("different raw status" in d for _, d in result.structural_evidence)
 
 
 def test_custom_error_page_is_detected():
@@ -266,7 +306,7 @@ def test_custom_error_page_is_detected():
 
     with patch(
         "phpdetector.scanner.requests.get",
-        side_effect=[homepage, custom_404, not_found, not_found, not_found],
+        side_effect=[homepage, custom_404, not_found, not_found, not_found, not_found],
     ):
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
@@ -285,7 +325,7 @@ def test_default_apache_404_page_is_not_flagged_as_custom():
 
     with patch(
         "phpdetector.scanner.requests.get",
-        side_effect=[homepage, apache_404, apache_404, apache_404, apache_404],
+        side_effect=[homepage, apache_404, apache_404, apache_404, apache_404, apache_404],
     ):
         result = scan_one("http://example.test", cve_db=[], engine_db=[])
 
@@ -337,8 +377,8 @@ def test_permission_probe_not_used_without_the_flag():
         result = scan_one("http://example.test", cve_db=[], engine_db=[], permission=False)
 
     assert result.permission_probe_used is False
-    # tiers 1-3 only: homepage + baseline + ext + index.php + trailing-slash = 5 calls, no 6th.
-    assert mock_get.call_count == 5
+    # tiers 1-3 only: homepage + tier2 baseline + tier3's (raw baseline + ext + index.php + trailing-slash).
+    assert mock_get.call_count == 6
 
 
 def test_permission_probe_fires_when_enabled_and_still_ambiguous():
@@ -351,11 +391,11 @@ def test_permission_probe_fires_when_enabled_and_still_ambiguous():
 
     with patch(
         "phpdetector.scanner.requests.get",
-        side_effect=[homepage, not_found, not_found, not_found, not_found, warning_leak],
+        side_effect=[homepage, not_found, not_found, not_found, not_found, not_found, warning_leak],
     ) as mock_get:
         result = scan_one("http://example.test", cve_db=[], engine_db=[], permission=True)
 
-    assert mock_get.call_count == 6
+    assert mock_get.call_count == 7
     assert result.permission_probe_used is True
     assert result.php_probability == pytest.approx(MALFORMED_INPUT_WEIGHT)
     assert any("array-typed query parameter" in d for _, d in result.structural_evidence)
