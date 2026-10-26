@@ -66,15 +66,16 @@ def test_evaluate_engine_path_signal_requires_probe_result():
 
 
 def test_evaluate_engine_path_signal_ignored_when_matches_baseline():
-    """A WAF/catch-all that answers every path with the same status (e.g.
-    403 for everything) must not look like the path exists."""
+    """A catch-all that answers every path with the same status (e.g.
+    200 for everything via an SPA fallback) must not look like the path
+    exists."""
     engine = EngineFingerprint("WordPress", signals=[
         Signal(SignalKind.PATH, "/wp-login.php", 0.6, "/wp-login.php reachable"),
     ])
     score, evidence = evaluate_engine(
         engine, headers={}, cookie_text="", body_text="",
-        path_probe_results={"/wp-login.php": (403, "")},
-        baseline_status=403,
+        path_probe_results={"/wp-login.php": (200, "")},
+        baseline_status=200,
     )
     assert score == 0.0
     assert evidence == []
@@ -82,11 +83,29 @@ def test_evaluate_engine_path_signal_ignored_when_matches_baseline():
     # Same status code as a real hit, but baseline differs -> counts.
     score, evidence = evaluate_engine(
         engine, headers={}, cookie_text="", body_text="",
-        path_probe_results={"/wp-login.php": (403, "")},
+        path_probe_results={"/wp-login.php": (200, "")},
         baseline_status=404,
     )
     assert score == pytest.approx(0.6)
     assert evidence
+
+
+def test_evaluate_engine_path_signal_never_counts_403():
+    """A 403 on a well-known path like /wp-login.php is at least as
+    likely to be a WAF/CDN managed ruleset blocking known attack-surface
+    paths on every site it protects (regardless of backend) as it is to
+    mean the path genuinely exists -- confirmed live against a non-PHP
+    site. It must never count as a hit, baseline or no baseline."""
+    engine = EngineFingerprint("WordPress", signals=[
+        Signal(SignalKind.PATH, "/wp-login.php", 0.6, "/wp-login.php reachable"),
+    ])
+    score, evidence = evaluate_engine(
+        engine, headers={}, cookie_text="", body_text="",
+        path_probe_results={"/wp-login.php": (403, "")},
+        baseline_status=404,  # differs from baseline -- still must not count
+    )
+    assert score == 0.0
+    assert evidence == []
 
 
 def test_evaluate_all_engines_combines_php_probability():

@@ -243,8 +243,20 @@ def _structural_signals(
     #    .html path, both raw. A PHP backend may answer differently --
     #    but only if it answers differently from ANY nonexistent path,
     #    not just because both happen to be caught by a blanket redirect.
+    #
+    #    A 403 specifically doesn't count here, confirmed live: a WAF/CDN
+    #    managed ruleset can block the .php extension by name on every
+    #    site it protects, independent of the real backend -- seen on a
+    #    Next.js (non-PHP) site where /x.php got 403 but /x.asp got a
+    #    normal 404, i.e. it's an extension-pattern block, not evidence
+    #    of PHP. Same principle as the PATH-signal fix in fingerprints.py.
     php_status, _, php_body = _probe_raw(url, f"/phpdetector-ext-check-{token}.php", timeout, user_agent)
-    if php_status is not None and raw_baseline_status is not None and php_status != raw_baseline_status:
+    if (
+        php_status is not None
+        and php_status != 403
+        and raw_baseline_status is not None
+        and php_status != raw_baseline_status
+    ):
         evidence.append((
             EXTENSION_BEHAVIOR_WEIGHT,
             f"nonexistent .php path gets a different raw status than .html ({php_status} vs {raw_baseline_status})",

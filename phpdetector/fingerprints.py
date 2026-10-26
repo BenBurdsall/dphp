@@ -123,10 +123,22 @@ def evaluate_engine(
 
     `baseline_status` is the status code returned for a deliberately
     nonexistent path on the same host. A real path only counts as a hit
-    if its status *differs* from that baseline -- otherwise a WAF or
-    catch-all route that returns the same status for every path (e.g.
-    403 for everything, or 200 for everything via an SPA fallback) would
-    look like every engine's paths exist at once.
+    if its status *differs* from that baseline -- otherwise a catch-all
+    route that returns the same status for every path (e.g. 200 for
+    everything via an SPA fallback, or a redirect-everywhere soft-404)
+    would look like every engine's paths exist at once.
+
+    A PATH hit requires status 200/301/302 -- NOT 403. A 403 on one of
+    these exact literal paths (/wp-login.php, /administrator/,
+    /phpmyadmin/, ...) is at least as likely to be a WAF/CDN managed
+    ruleset proactively blocking well-known attack-surface paths by
+    name on EVERY site it protects, regardless of the real backend, as
+    it is to mean the path genuinely exists. Confirmed live: a Next.js
+    (non-PHP) site returned a clean 404 for a random nonexistent path
+    but a 403 (same WAF block page) for /wp-login.php, /wp-json/,
+    /administrator/ and /phpmyadmin/ all at once -- different from the
+    baseline, so the dedup above didn't catch it, and a 403 counting as
+    a hit made it look like four CMS engines were installed at once.
     """
     path_probe_results = path_probe_results or {}
     evidence: list[tuple[float, str]] = []
@@ -150,7 +162,7 @@ def evaluate_engine(
             if probe is None:
                 continue
             status, probe_body = probe
-            if status is None or status not in (200, 301, 302, 403):
+            if status is None or status not in (200, 301, 302):
                 continue
             if baseline_status is not None and status == baseline_status:
                 continue

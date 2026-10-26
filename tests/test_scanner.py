@@ -193,6 +193,44 @@ def test_soft_404_via_redirect_does_not_create_false_positive():
     assert result.structural_evidence == []
 
 
+def test_waf_blocks_known_paths_and_php_extension_without_false_positive():
+    """Real-world case (dunnhumby.com -- actually Next.js, not PHP): a
+    WAF/CDN managed ruleset returns 403 (same generic block page) for
+    /wp-login.php and /phpmyadmin/, AND for any nonexistent path ending
+    in .php -- while a genuinely random nonexistent .html path gets an
+    ordinary, different 404. None of that is PHP/CMS evidence: not the
+    PATH-signal matching (403 never counts there), not the extension-
+    behaviour check (a 403 specifically doesn't count as "different"
+    there either, for the same reason)."""
+    engine_db = [
+        EngineFingerprint("WordPress", signals=[
+            Signal(SignalKind.PATH, "/wp-login.php", 0.6, "/wp-login.php reachable"),
+        ]),
+        EngineFingerprint("phpMyAdmin", signals=[
+            Signal(SignalKind.PATH, "/phpmyadmin/", 0.5, "/phpmyadmin/ reachable"),
+        ]),
+    ]
+    homepage = _mock_response(headers={}, body="nothing interesting here")
+    waf_block = _mock_response(status=403, body="forbidden")
+    real_404 = _mock_response(status=404, body="not found " + "x" * 200)
+    call_count = {"n": 0}
+
+    def side_effect(url, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return homepage
+        if url.endswith(".php") or "/wp-login.php" in url or "/phpmyadmin/" in url:
+            return waf_block
+        return real_404
+
+    with patch("phpdetector.scanner.requests.get", side_effect=side_effect):
+        result = scan_one("http://example.test", cve_db=[], engine_db=engine_db)
+
+    assert result.engine_matches == []
+    assert not any("different raw status" in d for _, d in result.structural_evidence)
+    assert not result.php_detected
+
+
 def test_confident_first_pass_does_not_probe():
     engine_db = _php_header_engine_db()
     homepage = _mock_response(headers={"X-Powered-By": "PHP/8.3.0"})
